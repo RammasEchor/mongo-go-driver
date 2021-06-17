@@ -101,13 +101,13 @@ func newConnection(addr address.Address, opts ...ConnectionOption) (*connection,
 	return c, nil
 }
 
-func (c *connection) processInitializationError(err error) {
+func (c *connection) processInitializationError(err error, isOperationDeadline bool) {
 	atomic.StoreInt32(&c.connected, disconnected)
 	if c.nc != nil {
 		_ = c.nc.Close()
 	}
 
-	c.connectErr = ConnectionError{Wrapped: err, init: true}
+	c.connectErr = ConnectionError{Wrapped: err, init: true, isOperationDeadline: isOperationDeadline}
 	if c.config.errorHandlingCallback != nil {
 		c.config.errorHandlingCallback(c.connectErr, c.generation, c.desc.ServiceID)
 	}
@@ -141,6 +141,8 @@ func (c *connection) connect(ctx context.Context) {
 		return
 	}
 	defer close(c.connectDone)
+
+	_, isOperationDeadline := ctx.Deadline()
 
 	// Create separate contexts for dialing a connection and doing the MongoDB/auth handshakes.
 	//
@@ -184,7 +186,7 @@ func (c *connection) connect(ctx context.Context) {
 	var tempNc net.Conn
 	tempNc, err = c.config.dialer.DialContext(dialCtx, c.addr.Network(), c.addr.String())
 	if err != nil {
-		c.processInitializationError(err)
+		c.processInitializationError(err, isOperationDeadline)
 		return
 	}
 	c.nc = tempNc
@@ -200,7 +202,7 @@ func (c *connection) connect(ctx context.Context) {
 		}
 		tlsNc, err := configureTLS(dialCtx, c.config.tlsConnectionSource, c.nc, c.addr, tlsConfig, ocspOpts)
 		if err != nil {
-			c.processInitializationError(err)
+			c.processInitializationError(err, isOperationDeadline)
 			return
 		}
 		c.nc = tlsNc
@@ -252,7 +254,7 @@ func (c *connection) connect(ctx context.Context) {
 
 	// We have a failed handshake here
 	if err != nil {
-		c.processInitializationError(err)
+		c.processInitializationError(err, isOperationDeadline)
 		return
 	}
 
